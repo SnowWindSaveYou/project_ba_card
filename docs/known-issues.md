@@ -1,14 +1,15 @@
 # 已知问题记录
 
-> 最后更新：2026-05-22
+> 最后更新：2026-05-24
 
 ---
 
 ## [ISSUE-001] 武器/装备技能实际效果未实现
 
-**状态**: 待开发  
+**状态**: 已修复  
 **优先级**: 高  
-**发现时间**: 2026-05-22
+**发现时间**: 2026-05-22  
+**修复时间**: 2026-05-24
 
 ### 现象
 
@@ -71,6 +72,27 @@
 - `scripts/Game/GameFSM.lua` — 新增 `armor_ability` 分支 + `_doArmorAbility()`
 - `scripts/Game/CustomHandlers.lua` — 注册各装备 handler
 - `scripts/Game/ActionValidator.lua` — 可能需要新增装备技能校验
+
+### 修复摘要（2026-05-24）
+
+1. **`main.lua`**：`weapon_attack` → `{ type = "weapon", weaponIndex = 1 }`，复用现有 FSM 逻辑
+2. **`GameFSM.lua`**：
+   - `executeAction()` 新增 `armor_ability` 分支
+   - 新增 `_doArmorAbility(player, slot)` 方法，含费用扣除、`usedAbilityThisTurn` 标记、customHandler/effects 调度
+   - `beginTurn()` 接入 `CustomHandlers.tickFyendalCounters(p)`（春日碎花衬衫计数器）
+   - `_doSkipReaction()` 接入 `CustomHandlers.checkMaskOfMomentum(...)`（DASH·露脐运动衫被动）
+3. **`ActionValidator.lua`**：新增 `canUseEquipmentAbility(player, slot, phase)` + 2 条错误码
+4. **`Player.lua`**：`beginTurn()` 重置循环中增加 `eq.usedAbilityThisTurn = false`
+5. **`CustomHandlers.lua`**：注册全部 8 个装备技能 handler：
+   - `eq_braveforge_bracers` / `apply_braveforge_buff`（桜風·改良水手服）
+   - `eq_tectonic_plating`（云裳·盘扣对襟衫）
+   - `eq_mask_of_momentum`（DASH·露脐运动衫，被动）
+   - `eq_skullhorn`（K.O.·铆钉皮背心）
+   - `eq_fyendals_spring_tunic`（春日碎花衬衫）
+   - `eq_hope_merchants_hood`（幸运兔耳帽衫）
+   - `roll_gain_resource`（K.O.·绑带运动内衣）
+   - `roll_gain_action`（K.O.·破洞牛仔热裤）
+   - 工具函数：`tickFyendalCounters()` / `checkMaskOfMomentum()`
 
 ---
 

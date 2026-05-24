@@ -30,6 +30,17 @@ local LOWER_POS  = Vector3(0, WORLD_Y,  1.0)
 -- ============================================================================
 -- 配置
 -- ============================================================================
+-- 克隆 DiffAlpha.xml + UNLIT：alpha 混合 + 不受光照暗化（只创建一次）
+local diffAlphaUnlitTech_ = nil
+local function getDiffAlphaUnlitTech()
+    if diffAlphaUnlitTech_ then return diffAlphaUnlitTech_ end
+    local base = cache:GetResource("Technique", "Techniques/DiffAlpha.xml")
+    diffAlphaUnlitTech_ = base:Clone("ZW_DiffAlphaUnlit")
+    local pass = diffAlphaUnlitTech_:GetPass("alpha")
+    if pass then pass:SetPixelShaderDefines("DIFFMAP UNLIT") end
+    return diffAlphaUnlitTech_
+end
+
 local CFG = {
     iconWorldSize = 1.4,    -- 世界尺寸（米）
     idleAlpha     = 0.15,   -- 静止半透明度
@@ -67,9 +78,11 @@ local function createIconNode(parent, texPath, pos, alpha)
     model:SetModel(cache:GetResource("Model", "Models/Plane.mdl"))
     model.castShadows = false
 
+    local iconTex = cache:GetResource("Texture2D", texPath)
+    if iconTex then iconTex:SetSRGB(true) end
     local mat = Material:new()
-    mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/DiffAlpha.xml"))
-    mat:SetTexture(TU_DIFFUSE, cache:GetResource("Texture2D", texPath))
+    mat:SetTechnique(0, getDiffAlphaUnlitTech())  -- alpha 混合 + 不受光照暗化
+    mat:SetTexture(TU_DIFFUSE, iconTex)
     mat:SetShaderParameter("MatDiffColor", Variant(Color(1, 1, 1, alpha)))
     model:SetMaterial(mat)
 
@@ -87,9 +100,11 @@ local function createGhost(parent, texPath)
     model:SetModel(cache:GetResource("Model", "Models/Plane.mdl"))
     model.castShadows = false
 
+    local ghostTex = cache:GetResource("Texture2D", texPath)
+    if ghostTex then ghostTex:SetSRGB(true) end
     local mat = Material:new()
-    mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/DiffAlpha.xml"))
-    mat:SetTexture(TU_DIFFUSE, cache:GetResource("Texture2D", texPath))
+    mat:SetTechnique(0, getDiffAlphaUnlitTech())  -- alpha 混合 + 不受光照暗化
+    mat:SetTexture(TU_DIFFUSE, ghostTex)
     mat:SetShaderParameter("MatDiffColor", Variant(Color(1, 1, 1, 0)))
     model:SetMaterial(mat)
 

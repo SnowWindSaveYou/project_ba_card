@@ -13,11 +13,16 @@ TableScene.TABLE_Y      = -0.03
 
 local function createPBRMaterial(color, metallic, roughness, technique)
     local mat = Material:new()
-    local tech = technique or "Techniques/PBR/PBRNoTexture.xml"
+    -- 无 technique 指定时（不透明）用 NoTextureUnlit，绕过 ambient 暗化
+    -- 有 technique 指定时（如带 alpha 的装饰线）保留传入的 PBR 变体
+    local tech = technique or "Techniques/NoTextureUnlit.xml"
     mat:SetTechnique(0, cache:GetResource("Technique", tech))
     mat:SetShaderParameter("MatDiffColor", Variant(color))
-    mat:SetShaderParameter("Metallic", Variant(metallic))
-    mat:SetShaderParameter("Roughness", Variant(roughness))
+    if technique then
+        -- PBR 透明变体才需要这些参数
+        mat:SetShaderParameter("Metallic",  Variant(metallic))
+        mat:SetShaderParameter("Roughness", Variant(roughness))
+    end
     return mat
 end
 
@@ -143,28 +148,16 @@ function TableScene.create(scene)
     -- 3. 鎏金内边线
     createInnerGiltBorder(root)
 
-    -- 4. 区域标记（极低饱和度，融入暗色桌面）
+    -- 注：桌面区域标记已由 BattleGrid 覆盖，此处仅保留桌面外牌库位置标记
     local markY = TableScene.TABLE_Y + 0.002
 
-    -- 连招链（中央）
-    createZoneMarker(root, "Zone_CombatChain",
-        Vector3(0, markY, 0), 3.6, 1.2, Theme.ZONE_CHAIN)
-
-    -- 己方预备区
-    createZoneMarker(root, "Zone_MyArsenal",
-        Vector3(0, markY, -1.3), 0.7, 0.5, Theme.ZONE_ARSENAL)
-
-    -- 己方牌库
+    -- 己方牌库（桌面右侧外）
     createZoneMarker(root, "Zone_MyDeck",
-        Vector3(2.3, markY, -1.3), 0.7, 0.9, Theme.ZONE_DECK)
+        Vector3(3.6, markY, -1.3), 0.7, 0.9, Theme.ZONE_DECK)
 
-    -- 对手预备区
-    createZoneMarker(root, "Zone_OppArsenal",
-        Vector3(0, markY, 1.3), 0.7, 0.5, Theme.ZONE_ARSENAL)
-
-    -- 对手牌库
+    -- 对手牌库（桌面右侧外）
     createZoneMarker(root, "Zone_OppDeck",
-        Vector3(2.3, markY, 1.3), 0.7, 0.9, Theme.ZONE_DECK)
+        Vector3(3.6, markY, 1.3), 0.7, 0.9, Theme.ZONE_DECK)
 
     -- 5. 鎏金分隔线装饰
     createGiltDividers(root)

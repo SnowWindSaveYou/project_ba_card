@@ -74,6 +74,57 @@ no UI, no text, no frame, no border, character illustration only
 
 ---
 
+---
+
+## 游戏背景图风格：矢量街机 + 蔚蓝档案色调
+
+### 核心定位
+
+> **矢量底层（flat vector）+ 千禧街机要素（Y2K arcade）+ 蔚蓝档案色调（Blue Archive tone）**
+
+两层叠加逻辑：
+- 基础层：大色块、有机圆形、平涂渐变、干净边缘 → 来自矢量插画
+- 装饰层：像素十字星、等距砖块平台、半调网点、厚描边 → 来自千禧街机游戏
+
+### 可复用 Prompt 模板
+
+```
+wide horizontal city skyline poster,
+flat vector illustration style, Y2K arcade aesthetic, thick outline vector shapes,
+isometric and layered city buildings silhouette, large smooth organic blob shapes as background elements,
+color tone inspired by Blue Archive game: vivid sky blue, warm white, golden sunlight yellow, soft coral,
+airy and bright high saturation pastels, clean summer daylight atmosphere, cheerful and youthful energy,
+no doodles, no characters, no crayon texture, pure clean vector arcade art
+```
+
+### 关键词拆解
+
+| 关键词 | 作用 |
+|--------|------|
+| `flat vector illustration style` | 定义基础画风：扁平矢量 |
+| `Y2K arcade aesthetic` | 引入千禧街机装饰要素 |
+| `thick outline vector shapes` | 厚描边贴纸感 |
+| `isometric and layered city buildings silhouette` | 等距城市轮廓，多层景深 |
+| `large smooth organic blob shapes` | 大色块有机形状背景 |
+| `color tone inspired by Blue Archive` | 色调锚点：明亮青春 |
+| `vivid sky blue, warm white, golden sunlight yellow, soft coral` | 具体色彩定义 |
+| `airy and bright high saturation pastels` | 通透感、高饱和粉彩 |
+| `no crayon texture` | 排除蜡笔画风干扰 |
+
+### 风格变量（可替换）
+
+- **内容**：`city skyline` 可换 `beach`, `campus`, `rooftop`, `arcade hall` 等场景
+- **色调**：`Blue Archive` 可换 `sunset warm orange`, `night neon`, `rainy cool grey` 等
+- **装饰元素**（可追加）：doodle icons, pixel sparkles, halftone dot patches, cloud puffs
+
+### 推荐参数
+
+- 比例：`16:9`（横版背景）
+- 尺寸：`1344x768`
+- 模型：GPT
+
+---
+
 ## 推荐参数
 
 - 比例：`2:3`（卡牌竖版）

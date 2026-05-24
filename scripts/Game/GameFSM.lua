@@ -168,6 +168,9 @@ function GameFSM:beginTurn()
     -- 清理回合开始时过期的状态标记（Crush 持续效果等）
     CustomHandlers.cleanupMarksOnTurnStart(p)
 
+    -- 春日碎花衬衫：每回合开始叠加能量计数器
+    CustomHandlers.tickFyendalCounters(p)
+
     -- 检查抑制效果并记录日志
     if CustomHandlers.isGoAgainSuppressed(p) then
         self:addLog(string.format("⚡ %s 本回合不能获得连招（推山掌效果）", p.heroName))
@@ -241,6 +244,9 @@ function GameFSM:executeAction(action)
 
     elseif aType == "hero_ability" then
         return self:_doHeroAbility(player)
+
+    elseif aType == "armor_ability" then
+        return self:_doArmorAbility(player, action.slot)
 
     elseif aType == "end_action" then
         return self:_doEndAction()
@@ -630,6 +636,78 @@ function GameFSM:_doHeroAbility(player)
     return true, nil
 end
 
+--- 激活装备主动技能
+---@param player table
+---@param slot string SLOT.UPPER / SLOT.LOWER
+---@return boolean ok
+---@return string|nil reason
+function GameFSM:_doArmorAbility(player, slot)
+    local phase = self:effectivePhase()
+    local opp = self:opponent()
+
+    -- 基础校验
+    local ok, reason = ActionValidator.canUseEquipmentAbility(player, slot, phase)
+    if not ok then return false, reason end
+
+    local eq = player:getEquipment(slot)
+    -- 再次确认（canUseEquipmentAbility 已检查，这里做防御性断言）
+    if not eq then return false, "no_equipment" end
+
+    local eqData = eq.data
+
+    -- 费用扣除
+    local cost = eqData.cost or 0
+    if cost > 0 then
+        if player.resourcePool < cost then
+            -- 尝试从充能区补足
+            local needed = cost - player.resourcePool
+            local payOk, payErr = PitchSystem.pitchAndPay(player, eqData.id, {}, cost)
+            if not payOk then return false, payErr end
+        else
+            player:spendResource(cost)
+        end
+    end
+
+    -- 标记本回合已用
+    eq.usedAbilityThisTurn = true
+
+    self:addLog(string.format("%s 激活装备：%s", player.heroName, eqData.name))
+
+    -- 构建上下文
+    local ctx = EffectProcessor.buildContext({
+        attacker    = player,
+        defender    = opp,
+        chain       = self.combatChain,
+        card        = nil,
+        cardId      = eqData.id,
+        fsm         = self,
+        source      = "equipment",
+        sourceSlot  = slot,
+        sourceEquip = eq,
+    })
+
+    -- 优先走 customHandler
+    if eqData.customHandler then
+        local handler = CustomHandlers.get(eqData.customHandler)
+        if handler then
+            local handlerOk, handlerErr = handler(ctx)
+            if not handlerOk then
+                -- 回滚标记
+                eq.usedAbilityThisTurn = false
+                return false, handlerErr or "equipment_handler_failed"
+            end
+        else
+            self:addLog(string.format("[WARN] 装备 %s 的 customHandler '%s' 未注册",
+                eqData.name, eqData.customHandler))
+        end
+    elseif eqData.effects and #eqData.effects > 0 then
+        -- 通用 effects 处理（destroy_self / reduce_cost / grant_go_again 等）
+        EffectProcessor.processCard(ctx)
+    end
+
+    return true, nil
+end
+
 --- 结束行动阶段
 function GameFSM:_doEndAction()
     -- 如果有未关闭的连招链，先关闭
@@ -888,6 +966,10 @@ function GameFSM:_doSkipReaction()
 
     -- 清空当前攻击上下文
     self._currentAttackCtx = nil
+
+    -- DASH·露脐运动衫（被动）：第3+环节命中时抽牌
+    local linkNumber = #self.combatChain.links
+    CustomHandlers.checkMaskOfMomentum(player, player, linkNumber, didHit, self)
 
     -- 结算后处理
     self:_afterLinkResolved()

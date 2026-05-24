@@ -253,17 +253,11 @@ function HUDSync.syncPlayability(gc)
     for _, cardId in ipairs(player.hand) do
         local card3d = gc._cardIdToCard3D[cardId]
         if card3d then
-            -- 只要有任意合法行动（攻击/辅助/留场/充能）即高亮
-            local playable = false
-            if ActionValidator.canPlayAttack(player, cardId, phase, chain) then
-                playable = true
-            elseif ActionValidator.canPlaySupport(player, cardId, phase) then
-                playable = true
-            elseif ActionValidator.canPlayArenaCard(player, cardId, phase) then
-                playable = true
-            elseif ActionValidator.canPitch(player, cardId) then
-                playable = true
-            end
+            -- 仅当卡牌能打到桌面上时才高亮（不含充能用途）
+            local playable =
+                ActionValidator.canPlayAttack(player, cardId, phase, chain) or
+                ActionValidator.canPlaySupport(player, cardId, phase) or
+                ActionValidator.canPlayArenaCard(player, cardId, phase)
             if playable then
                 CardGlowManager.setPlayable(card3d, true)
             end

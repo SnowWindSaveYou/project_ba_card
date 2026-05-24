@@ -26,7 +26,7 @@ local ZONE_DEFS = {
         label = "预备区",
     },
     myDeck = {
-        pos = Vector3(2.3, TABLE_Y + 0.01, -1.3),
+        pos = Vector3(3.6, TABLE_Y + 0.01, -1.3),
         width = 0.7, depth = 0.9,
         cardLimit = 40,
         label = "牌库",
@@ -48,7 +48,7 @@ local ZONE_DEFS = {
         label = "对手预备区",
     },
     oppDeck = {
-        pos = Vector3(2.3, TABLE_Y + 0.01, 1.3),
+        pos = Vector3(3.6, TABLE_Y + 0.01, 1.3),
         width = 0.7, depth = 0.9,
         cardLimit = 40,
         label = "对手牌库",

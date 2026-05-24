@@ -55,6 +55,11 @@ end
 ---@param options table|nil {easing, delay, onComplete, onUpdate, loops, yoyo}
 ---@return table tween
 function Tween.to(target, duration, props, options)
+    if target == nil then
+        print("[Tween] WARNING: Tween.to called with nil target, skipping")
+        -- 返回一个哑 tween 以避免调用方的链式操作（如 :kill()）崩溃
+        return { kill = function() end, pause = function() end, resume = function() end }
+    end
     options = options or {}
     tweenIdCounter = tweenIdCounter + 1
 

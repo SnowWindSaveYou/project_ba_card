@@ -656,6 +656,287 @@ CustomHandlers.register("nin_pounding_gale", function(ctx)
     return true
 end)
 
+-- ============================================================================
+-- 装备技能处理器
+-- 对应 HeroData.equipment 中带 customHandler 的装备
+-- ============================================================================
+
+--- 桜風·改良水手服 (eq_braveforge_bracers / Warrior)
+--- 每回合一次 [行动] {1}：若架势本回合已命中，下次架势攻击 +1 攻击力，获得连招
+CustomHandlers.register("eq_braveforge_bracers", function(ctx)
+    local player = ctx.attacker
+
+    -- 条件：架势本回合已命中
+    if (player.turnStats.weaponHits or 0) < 1 then
+        return false, "no_weapon_hit"
+    end
+
+    -- 挂载 pending buff：下次架势攻击 +1 攻击力 + 连招
+    player._pendingBuffs = player._pendingBuffs or {}
+    player._pendingBuffs[#player._pendingBuffs + 1] = {
+        type   = "eq_braveforge",
+        used   = false,
+    }
+
+    if ctx.fsm then
+        ctx.fsm:addLog(string.format(
+            "%s 激活桜風改良水手服：下次架势攻击 +1{p} 并获得连招", player.heroName))
+    end
+    return true
+end)
+
+--- pending buff 消费：桜風改良水手服
+CustomHandlers.register("apply_braveforge_buff", function(ctx)
+    -- 武器攻击时触发
+    if ctx.chain and ctx.chain.current then
+        ctx.chain:buffCurrentPower(1, "桜風改良水手服")
+        ctx.chain:grantGoAgain()
+        if ctx.fsm then
+            ctx.fsm:addLog("桜風改良水手服生效：架势 +1{p}，获得连招")
+        end
+        return true
+    end
+    return false
+end)
+
+--- 云裳·盘扣对襟衫 (eq_tectonic_plating / Guardian)
+--- 每回合一次 [行动] {1}：创建「震波 (4)」令牌，获得连招
+CustomHandlers.register("eq_tectonic_plating", function(ctx)
+    local player = ctx.attacker
+
+    -- 创建震波令牌（放入场上）
+    player.arenaCards = player.arenaCards or {}
+    local tokenCard = CardDB.get("token_seismic_surge")
+    if tokenCard then
+        player.arenaCards[#player.arenaCards + 1] = tokenCard
+    end
+
+    -- 给予连招（若在连招链中）
+    if ctx.chain and ctx.chain.current then
+        ctx.chain:grantGoAgain()
+    else
+        -- 不在连招链中：给一个行动点代替连招
+        player:gainActionPoint(1)
+    end
+
+    if ctx.fsm then
+        ctx.fsm:addLog(string.format(
+            "%s 激活云裳盘扣对襟衫：创建震波令牌，获得连招", player.heroName))
+    end
+    return true
+end)
+
+--- DASH·露脐运动衫 (eq_mask_of_momentum / Ninja)
+--- 连招链第 3 环节及以上命中时抽 1 张牌
+--- 此效果为被动触发（由 GameFSM._afterLinkResolved 后检查）
+--- handler 在护具技能激活时无直接操作，被动检测注册在 onHit 路径
+CustomHandlers.register("eq_mask_of_momentum", function(ctx)
+    -- 被动：主动激活时无效果（提示玩家这是被动护具）
+    if ctx.fsm then
+        ctx.fsm:addLog("DASH露脐运动衫：被动效果，连招链第3环及以上命中时自动抽牌")
+    end
+    return false, "equipment_no_ability"  -- 阻止消耗行动
+end)
+
+--- K.O.·铆钉皮背心 (eq_skullhorn / Brute)
+--- [瞬发]：销毁本件护具，抽 1 张牌，然后随机弃 1 张牌
+CustomHandlers.register("eq_skullhorn", function(ctx)
+    local player = ctx.attacker
+    local eq = ctx.sourceEquip
+
+    -- 销毁护具
+    if eq then eq.destroyed = true end
+
+    -- 抽 1 张牌
+    local drawn = player:drawCards(1)
+
+    -- 随机弃 1 张牌（若手牌不为空）
+    if #player.hand > 0 then
+        local randIdx = math.random(1, #player.hand)
+        local discardId = table.remove(player.hand, randIdx)
+        player:addToGraveyard(discardId)
+        local discardCard = CardDB.get(discardId)
+
+        -- 触发铁拳小桃被动检查
+        if player.heroData and player.heroData.customHandler == "hero_rhinar" then
+            local rhinarCtx = {
+                attacker = player,
+                defender = ctx.defender,
+                fsm      = ctx.fsm,
+                _discardedCards = { discardId },
+            }
+            local rhinarHandler = CustomHandlers.get("hero_rhinar")
+            if rhinarHandler then rhinarHandler(rhinarCtx) end
+        end
+
+        if ctx.fsm then
+            ctx.fsm:addLog(string.format(
+                "%s 激活铆钉皮背心：抽1牌，弃掉 %s",
+                player.heroName, discardCard and discardCard.name or discardId))
+        end
+    else
+        if ctx.fsm then
+            ctx.fsm:addLog(string.format(
+                "%s 激活铆钉皮背心：抽1牌（无牌可弃）", player.heroName))
+        end
+    end
+
+    return true
+end)
+
+--- 春日碎花衬衫 (eq_fyendals_spring_tunic / Generic)
+--- 回合开始放能量计数器（最多 3 个）
+--- [瞬发]：移除 3 个能量计数器，获得 {1} 体能资源
+CustomHandlers.register("eq_fyendals_spring_tunic", function(ctx)
+    local player = ctx.attacker
+    local eq = ctx.sourceEquip
+
+    if not eq then return false, "no_equipment" end
+
+    eq.counters = eq.counters or {}
+    local energyCount = eq.counters.energy or 0
+
+    if energyCount < 3 then
+        return false, "insufficient_counters"
+    end
+
+    -- 移除 3 个能量计数器，获得 {1} 体能
+    eq.counters.energy = energyCount - 3
+    player:gainResource(1)
+
+    if ctx.fsm then
+        ctx.fsm:addLog(string.format(
+            "%s 激活春日碎花衬衫：移除 3 个能量计数器，获得 {1} 体能",
+            player.heroName))
+    end
+    return true
+end)
+
+--- 幸运兔耳帽衫 (eq_hope_merchants_hood / Generic)
+--- [瞬发]：销毁本件护具，将任意张手牌洗回牌库，再抽等量手牌
+CustomHandlers.register("eq_hope_merchants_hood", function(ctx)
+    local player = ctx.attacker
+    local eq = ctx.sourceEquip
+
+    -- 销毁护具
+    if eq then eq.destroyed = true end
+
+    -- 将所有手牌洗回牌库（简化为全部，实际可做选择）
+    local shuffledCount = #player.hand
+    if shuffledCount > 0 then
+        for _, cardId in ipairs(player.hand) do
+            player.deck[#player.deck + 1] = cardId
+        end
+        player.hand = {}
+        player:shuffleDeck()
+
+        -- 再抽等量手牌
+        player:drawCards(shuffledCount)
+    end
+
+    if ctx.fsm then
+        ctx.fsm:addLog(string.format(
+            "%s 激活幸运兔耳帽衫：将 %d 张手牌洗回牌库并重抽",
+            player.heroName, shuffledCount))
+    end
+    return true
+end)
+
+--- K.O.·绑带运动内衣 (eq_barkbone_strapping / Brute)
+--- [瞬发]：销毁本件护具，掷6面骰，获得 ⌊结果÷2⌋ 点体能资源
+CustomHandlers.register("roll_gain_resource", function(ctx)
+    local player = ctx.attacker
+    local eq = ctx.sourceEquip
+
+    -- 销毁护具
+    if eq then eq.destroyed = true end
+
+    -- 掷骰
+    local roll = math.random(1, 6)
+    local gained = math.floor(roll / 2)
+    if gained > 0 then
+        player:gainResource(gained)
+    end
+
+    if ctx.fsm then
+        ctx.fsm:addLog(string.format(
+            "%s 激活绑带运动内衣：掷骰 %d，获得 %d 点体能",
+            player.heroName, roll, gained))
+    end
+    return true
+end)
+
+--- K.O.·破洞牛仔热裤 (eq_scabskin_leathers / Brute)
+--- 每回合一次 [行动] {0}：掷6面骰，获得 ⌊结果÷2⌋ 个行动点
+CustomHandlers.register("roll_gain_action", function(ctx)
+    local player = ctx.attacker
+
+    -- 掷骰
+    local roll = math.random(1, 6)
+    local gained = math.floor(roll / 2)
+    if gained > 0 then
+        player:gainActionPoint(gained)
+    end
+
+    if ctx.fsm then
+        ctx.fsm:addLog(string.format(
+            "%s 激活破洞牛仔热裤：掷骰 %d，获得 %d 个行动点",
+            player.heroName, roll, gained))
+    end
+    return true
+end)
+
+-- ============================================================================
+-- 春日碎花衬衫：回合开始放能量计数器
+-- 由 GameFSM.beginTurn 调用
+-- ============================================================================
+
+--- 检查并放置春日碎花衬衫的能量计数器
+---@param player table
+function CustomHandlers.tickFyendalCounters(player)
+    for _, eq in pairs(player.equipment) do
+        if eq and not eq.destroyed and eq.data and eq.data.customHandler == "eq_fyendals_spring_tunic" then
+            eq.counters = eq.counters or {}
+            local current = eq.counters.energy or 0
+            if current < 3 then
+                eq.counters.energy = current + 1
+            end
+        end
+    end
+end
+
+-- ============================================================================
+-- DASH·露脐运动衫：连招链命中时被动检查
+-- 由 GameFSM._afterLinkResolved 在命中后调用
+-- ============================================================================
+
+--- 检查 eq_mask_of_momentum 被动：连招链第 3 环节及以上命中时抽 1 张牌
+---@param player table 防御方（命中时是 defender.attacker 角度则是被攻击方 → 此为携带护具的玩家）
+---@param attacker table 攻击方
+---@param linkNumber number 当前连招环节编号
+---@param didHit boolean 是否命中
+---@param fsm table GameFSM
+function CustomHandlers.checkMaskOfMomentum(player, attacker, linkNumber, didHit, fsm)
+    if not didHit then return end
+    if linkNumber < 3 then return end
+
+    -- 遍历两位玩家（attacker 携带此护具时检查）
+    local function checkForPlayer(p)
+        for _, eq in pairs(p.equipment) do
+            if eq and not eq.destroyed and eq.data and eq.data.id == "eq_mask_of_momentum" then
+                p:drawCards(1)
+                if fsm then
+                    fsm:addLog(string.format(
+                        "DASH露脐运动衫：连招第 %d 环命中，%s 抽 1 张牌",
+                        linkNumber, p.heroName))
+                end
+                return
+            end
+        end
+    end
+    checkForPlayer(attacker)
+end
+
 --- 云柔 英雄能力的 pending buff 消费处理
 --- 由 EffectProcessor.applyPendingBuffs 的扩展逻辑调用
 CustomHandlers.register("apply_bravo_dominate", function(ctx)

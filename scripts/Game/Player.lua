@@ -792,6 +792,7 @@ function Player:beginTurn()
     for _, eq in pairs(self.equipment) do
         if eq and not eq.destroyed then
             eq.usedThisTurn = false
+            eq.usedAbilityThisTurn = false
         end
     end
 

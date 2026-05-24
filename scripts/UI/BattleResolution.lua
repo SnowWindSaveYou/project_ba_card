@@ -21,12 +21,13 @@ local BattleResolution = {}
 
 local STATE = {
     IDLE          = 0,
-    BLOCKS_ENTER  = 1,  -- 金色方块从左到右横扫桌面
-    SCORES_REVEAL = 2,  -- 中心向外揭露红蓝分区
-    SCORES_CLASH  = 3,  -- 分数对冲碰撞 + 波环
-    WINNER_GLOW   = 4,  -- 胜方区域变金
-    ATTACK_EXEC   = 5,  -- 攻击射线 + 火焰 + 星爆
-    DISSOLVE      = 6,  -- 从中心消散
+    PRE_DELAY     = 1,  -- 触发后等待延迟（isActive()=true，阻断外部边框操作）
+    BLOCKS_ENTER  = 2,  -- 金色方块从左到右横扫桌面
+    SCORES_REVEAL = 3,  -- 中心向外揭露红蓝分区
+    SCORES_CLASH  = 4,  -- 分数对冲碰撞 + 波环
+    WINNER_GLOW   = 5,  -- 胜方区域变金
+    ATTACK_EXEC   = 6,  -- 攻击射线 + 火焰 + 星爆
+    DISSOLVE      = 7,  -- 从中心消散
 }
 
 -- 各阶段持续时间（秒）
@@ -200,7 +201,8 @@ local state = {
     attackVal       = 0,       -- 攻击方攻击力（用于碰撞数字显示）
     defVal          = 0,       -- 防御方防御值（用于碰撞数字显示）
     damage          = 0,       -- 最后一次攻击伤害
-    attackerIsUpper = false,   -- 攻击方是否在上半区
+    attackerIsUpper      = false,   -- 攻击方是否在上半区
+    newAttackerIsLower   = nil,     -- DISSOLVE 后新攻击方位置（传给 grid:dissolve）
 
     -- BattleGrid 引用（由外部注入）
     grid        = nil,
@@ -259,8 +261,9 @@ function BattleResolution.trigger(params)
     state.attackVal       = params.attackVal or 0
     state.defVal          = params.defVal    or 0
     state.damage          = params.damage    or 0
-    state.attackerIsUpper = (params.attackerIsUpper == nil) and false or params.attackerIsUpper
-    state.onDone          = params.onDone
+    state.attackerIsUpper    = (params.attackerIsUpper == nil) and false or params.attackerIsUpper
+    state.newAttackerIsLower = params.newAttackerIsLower  -- 可为 nil
+    state.onDone             = params.onDone
 
     -- 重置
     PARTICLES = {}
@@ -282,7 +285,10 @@ function BattleResolution.trigger(params)
     state.winnerAlpha     = 0
     state.screenShake     = 0
 
-    state.phase = STATE.BLOCKS_ENTER
+    -- 进入预等待阶段：isActive() 立即返回 true，阻断外部边框操作
+    -- 实际动画在 preDelayTimer 倒计时结束后才开始
+    state.preDelayTimer = 1.0
+    state.phase = STATE.PRE_DELAY
 end
 
 --- 是否正在播放
@@ -334,6 +340,18 @@ end
 function BattleResolution.update(dt)
     if state.phase == STATE.IDLE then return end
 
+    -- PRE_DELAY：等待延迟结束后再正式开始
+    if state.phase == STATE.PRE_DELAY then
+        state.preDelayTimer = state.preDelayTimer - dt
+        if state.preDelayTimer <= 0 then
+            state.phase       = STATE.BLOCKS_ENTER
+            state.timer       = 0
+            state.progress    = 0
+            state.gridTriggered = false
+        end
+        return
+    end
+
     state.gameTime = state.gameTime + dt
 
     -- 震动衰减
@@ -361,8 +379,10 @@ function BattleResolution.update(dt)
 
     elseif state.phase == STATE.SCORES_REVEAL then
         if not state.gridTriggered and state.grid then
-            -- revealSides(duration, attackerIsUpper)：攻击方红色，防御方蓝色
-            state.grid:revealSides(dur * 0.7, state.attackerIsUpper)
+            -- revealSides 的 attackerIsUpper 参数含义：攻击方在 grid upper (row<=ROWS/2)
+            -- BattleResolution 的 attackerIsUpper 是视觉坐标（true=视觉上方=row5~8=grid lower）
+            -- 所以需要取反：视觉上方的攻击方 = grid lower = NOT grid upper
+            state.grid:revealSides(dur * 0.7, not state.attackerIsUpper)
             state.gridTriggered = true
         end
         if state.progress >= 1.0 then nextPhase() end
@@ -371,10 +391,11 @@ function BattleResolution.update(dt)
         -- SCORES_CLASH 子逻辑
         local p = state.progress
 
-        -- 进入阶段时立刻启动波环（波前从外向中心收缩，在碰撞前抵达）
+        -- 进入阶段时立刻启动波环（波前从外向中心收缩，与分数同步冲向碰撞点）
         if not state.gridTriggered and state.grid then
-            -- 波环在碰撞前（progress=0.35）走完，总时长 = dur * 0.35
-            state.grid:startClashWave(dur * 0.35)
+            -- 波环在 progress=0.37 抵达中心（略晚于碰撞点 0.35），
+            -- 使波前与分数数字视觉上"同时"冲向中心，碰撞瞬间波峰正在中心爆发
+            state.grid:startClashWave(dur * 0.37)
             state.gridTriggered = true
         end
 
@@ -408,7 +429,9 @@ function BattleResolution.update(dt)
 
     elseif state.phase == STATE.WINNER_GLOW then
         if not state.gridTriggered and state.grid then
-            state.grid:glowWinner(state.playerWon, dur * 0.7)
+            -- glowWinner(true) = row5~8(grid lower=视觉上方=对手侧)变金
+            -- playerWon=true 表示玩家(视觉下方=row1~4=grid upper)获胜，需要取反
+            state.grid:glowWinner(not state.playerWon, dur * 0.7)
             state.gridTriggered = true
         end
         state.winnerAlpha = easeOutCubic(state.progress)
@@ -444,7 +467,7 @@ function BattleResolution.update(dt)
         state.dmgAlpha    = math.max(0, state.dmgAlpha    - dt * 3)
 
         if not state.gridTriggered and state.grid then
-            state.grid:dissolve(dur * 0.7)
+            state.grid:dissolve(dur * 0.7, state.newAttackerIsLower)
             state.gridTriggered = true
         end
         if state.progress >= 1.0 then nextPhase() end
@@ -493,13 +516,6 @@ function BattleResolution.draw(ctx, w, h, fontId, time)
         nvgRect(ctx, 0, 0, w, h)
         nvgFillColor(ctx, nvgRGBA(12, 10, 20, math.floor(maskAlpha)))
         nvgFill(ctx)
-    end
-
-    -- ================================================================
-    -- BLOCKS_ENTER：金色前缘光效（NanoVG 装饰层）
-    -- ================================================================
-    if ph == STATE.BLOCKS_ENTER then
-        _drawBlocksEnterOverlay(ctx, w, h, p, time)
     end
 
     -- ================================================================
@@ -567,50 +583,6 @@ end
 -- ============================================================================
 -- 子绘制函数
 -- ============================================================================
-
-function _drawBlocksEnterOverlay(ctx, w, h, p, time)
-    -- 前缘亮条追踪（按 p 的进度对应 x 位置）
-    local frontX = w * easeOutCubic(p)
-
-    -- 粉色横条（随扫过进度渐入）
-    local barY  = h * 0.15
-    local barH  = 6
-    local barAlpha = math.floor(easeOutCubic(p) * 120)
-    nvgBeginPath(ctx)
-    nvgRect(ctx, 0, barY, frontX, barH)
-    local barGrad = nvgLinearGradient(ctx, 0, barY, frontX, barY,
-        nvgRGBA(230, 50, 128, 0),
-        nvgRGBA(230, 50, 128, barAlpha))
-    nvgFillPaint(ctx, barGrad)
-    nvgFill(ctx)
-
-    -- 右端高光
-    if frontX > 20 then
-        nvgBeginPath(ctx)
-        nvgRect(ctx, frontX - 30, barY - 2, 30, barH + 4)
-        local hlGrad = nvgLinearGradient(ctx, frontX - 30, barY, frontX, barY,
-            nvgRGBA(255, 255, 255, 0),
-            nvgRGBA(255, 255, 200, math.floor(barAlpha * 1.5)))
-        nvgFillPaint(ctx, hlGrad)
-        nvgFill(ctx)
-    end
-
-    -- 前缘竖向亮线
-    nvgBeginPath(ctx)
-    nvgMoveTo(ctx, frontX, 0)
-    nvgLineTo(ctx, frontX, h)
-    nvgStrokeColor(ctx, nvgRGBA(255, 230, 140, 140))
-    nvgStrokeWidth(ctx, 3)
-    nvgStroke(ctx)
-
-    -- 前缘前方微光羽化
-    nvgBeginPath(ctx)
-    nvgRect(ctx, frontX, 0, 20, h)
-    local gGrad = nvgLinearGradient(ctx, frontX, 0, frontX + 20, 0,
-        nvgRGBA(255, 220, 100, 50), nvgRGBA(255, 220, 100, 0))
-    nvgFillPaint(ctx, gGrad)
-    nvgFill(ctx)
-end
 
 function _drawScoresRevealOverlay(ctx, w, h, p, fontId)
     -- 分隔线（水平居中）

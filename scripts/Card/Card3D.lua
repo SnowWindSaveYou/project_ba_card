@@ -138,58 +138,65 @@ local texMatCache_ = {}
 local function getMaterial(key, r, g, b, metallic, roughness)
     if matCache_[key] then return matCache_[key]:Clone("") end
     local mat = Material:new()
-    mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/PBR/PBRNoTexture.xml"))
+    mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/NoTextureUnlit.xml"))
     mat:SetShaderParameter("MatDiffColor", Variant(Color(r, g, b, 1.0)))
-    mat:SetShaderParameter("Metallic", Variant(metallic or 0.02))
-    mat:SetShaderParameter("Roughness", Variant(roughness or 0.3))
     matCache_[key] = mat
     return mat:Clone("")
+end
+
+-- 克隆 DiffAlpha.xml 并加上 UNLIT define（只创建一次）
+-- 效果：alpha 混合（透明）+ 不受 SH ambient / 平行光影响，颜色直出
+local diffAlphaUnlitTech_ = nil
+local function getDiffAlphaUnlitTechnique()
+    if diffAlphaUnlitTech_ then return diffAlphaUnlitTech_ end
+    local base = cache:GetResource("Technique", "Techniques/DiffAlpha.xml")
+    diffAlphaUnlitTech_ = base:Clone("DiffAlphaUnlit")
+    local pass = diffAlphaUnlitTech_:GetPass("alpha")
+    if pass then
+        -- DIFFMAP=启用贴图采样, UNLIT=跳过光照计算
+        pass:SetPixelShaderDefines("DIFFMAP UNLIT")
+    end
+    return diffAlphaUnlitTech_
 end
 
 local function getTexturedMaterial(texturePath)
     if texMatCache_[texturePath] then return texMatCache_[texturePath]:Clone("") end
     local tex = cache:GetResource("Texture2D", texturePath)
     if not tex then return nil end
+    tex:SetSRGB(true)   -- 颜色贴图须标记 sRGB，让 GPU 正确解码到线性空间
     local mat = Material:new()
-    mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/DiffAlpha.xml"))
+    mat:SetTechnique(0, getDiffAlphaUnlitTechnique())  -- alpha 混合 + 不受光照暗化
     mat:SetTexture(TU_DIFFUSE, tex)
     mat:SetShaderParameter("MatDiffColor", Variant(Color(1, 1, 1, 1)))
     texMatCache_[texturePath] = mat
     return mat:Clone("")
 end
 
-local opaqueMaskTech_ = nil
+-- 克隆 DiffUnlit technique 并加上 ALPHAMASK define（只创建一次）
+-- 注意：强制写入完整 defines，防止读取 pixelShaderDefines 为空时丢失 UNLIT
+local unlitAlphaMaskTech_ = nil
+local function getUnlitAlphaMaskTechnique()
+    if unlitAlphaMaskTech_ then return unlitAlphaMaskTech_ end
+    local base = cache:GetResource("Technique", "Techniques/DiffUnlit.xml")
+    unlitAlphaMaskTech_ = base:Clone("DiffUnlitAlphaMask")
+    local pass = unlitAlphaMaskTech_:GetPass("base")
+    if pass then
+        -- 强制写入完整 defines：DIFFMAP=启用贴图, UNLIT=不受光照, ALPHAMASK=裁剪透明
+        pass:SetPixelShaderDefines("DIFFMAP UNLIT ALPHAMASK")
+    end
+    return unlitAlphaMaskTech_
+end
+
 local opaqueMatCache_ = {}
 
 local function getOpaqueTexturedMaterial(texturePath)
     if opaqueMatCache_[texturePath] then return opaqueMatCache_[texturePath]:Clone("") end
     local tex = cache:GetResource("Texture2D", texturePath)
     if not tex then return nil end
-
-    if not opaqueMaskTech_ then
-        local src = cache:GetResource("Technique", "Techniques/DiffVColAlphaMask.xml")
-            or cache:GetResource("Technique", "Techniques/DiffAlpha.xml")
-        if src then
-            opaqueMaskTech_ = src:Clone("CardOpaqueMask")
-            local ap = opaqueMaskTech_:GetPass("alpha")
-            if ap then
-                local bp = opaqueMaskTech_:CreatePass("base")
-                bp:SetVertexShader(ap:GetVertexShader())
-                bp:SetPixelShader(ap:GetPixelShader())
-                bp:SetVertexShaderDefines(ap:GetVertexShaderDefines())
-                bp:SetPixelShaderDefines(ap:GetPixelShaderDefines())
-                bp:SetBlendMode(BLEND_REPLACE)
-                bp:SetDepthWrite(true)
-                opaqueMaskTech_:RemovePass("alpha")
-            end
-            if opaqueMaskTech_:HasPass("litalpha") then
-                opaqueMaskTech_:RemovePass("litalpha")
-            end
-        end
-    end
-
+    tex:SetSRGB(true)   -- 颜色贴图须标记 sRGB，让 GPU 正确解码到线性空间
+    -- DiffUnlit + ALPHAMASK：不受光照影响，且裁剪掉透明区域
     local mat = Material:new()
-    mat:SetTechnique(0, opaqueMaskTech_)
+    mat:SetTechnique(0, getUnlitAlphaMaskTechnique())
     mat:SetTexture(TU_DIFFUSE, tex)
     mat:SetShaderParameter("MatDiffColor", Variant(Color(1, 1, 1, 1)))
     opaqueMatCache_[texturePath] = mat
@@ -360,7 +367,7 @@ function Card3D.create(scene, cardData, faceUp)
     card.textOverlayNode = nil
     if textTex then
         local overlayMat = Material:new()
-        overlayMat:SetTechnique(0, cache:GetResource("Technique", "Techniques/DiffAlpha.xml"))
+        overlayMat:SetTechnique(0, getDiffAlphaUnlitTechnique())  -- alpha 混合 + 不受光照暗化
         overlayMat:SetTexture(TU_DIFFUSE, textTex)
         overlayMat:SetShaderParameter("MatDiffColor", Variant(Color(1, 1, 1, 1)))
 
@@ -488,7 +495,7 @@ end
 function Card3D:setGlowTex(tex)
     if self.glowTexApplied_ or not self.glowNode_ then return end
     local mat = Material:new()
-    mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/DiffAlpha.xml"))
+    mat:SetTechnique(0, getDiffAlphaUnlitTechnique())  -- alpha 混合 + 不受光照暗化
     mat:SetTexture(TU_DIFFUSE, tex)
     mat:SetShaderParameter("MatDiffColor", Variant(Color(1.0, 0.82, 0.15, 0)))
     local sm = self.glowNode_:GetComponent("StaticModel")

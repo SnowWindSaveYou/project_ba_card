@@ -25,6 +25,7 @@ local Particles      = require("Anim.Particles")
 local BattleGrid       = require("Scene.BattleGrid")
 local BattleResolution = require("UI.BattleResolution")
 local CoinFlip         = require("UI.CoinFlip")
+local ZoneWatermark    = require("UI.ZoneWatermark")
 
 -- 子模块
 local ActionBarBuilder = require("Controller.ActionBarBuilder")
@@ -99,6 +100,11 @@ function GameController.new(deps)
     -- 横幅去重：记录上次显示的 barIndex，防止子阶段重复触发
     self._lastBannerIndex = 0
 
+    -- 边框 / 换边追踪
+    self._attackerIsLower  = true    -- 当前中回合攻击方是否在下半区
+    self._combatThisTurn   = false   -- 本中回合是否已触发战斗
+    self._borderInitialized = false  -- 是否已建立过边框底态
+
     -- 战斗结算网格（由外部 main.lua 创建后注入，避免重复构造）
     self._battleGrid = deps.battleGrid or BattleGrid.create(deps.scene)
     -- setGrid 已在 main.lua 中调用；若无外部注入则在此处补设
@@ -155,6 +161,9 @@ function GameController:restartGame()
     self._gameOver = false
     self._started = false
     self._lastBannerIndex = 0
+    self._attackerIsLower  = true
+    self._combatThisTurn   = false
+    self._borderInitialized = false
 
     self:startGame()
 end
@@ -258,6 +267,14 @@ function GameController:update(dt)
     -- 当前 actor 正在行动：推进其 update
     if self._activeActor then
         if self._activeActor:isActive() then
+            -- 大型动画播放期间：挂起玩家输入（隐藏 ActionBar，等动画结束再恢复）
+            if BattleResolution.isActive() and self._activeActor == self._actors[1] then
+                -- 确保 UI 在动画期间不可见（每帧调用是幂等的）
+                ActionBar.hide()
+                DefensePanel.hide()
+                if self._cardPicker then self._cardPicker.enabled = false end
+                return
+            end
             self._activeActor:onUpdate(self, dt)
             return
         else
@@ -273,6 +290,9 @@ function GameController:update(dt)
         return
     end
 
+    -- 大型动画（战斗结算）播放期间：阻断 actor 激活，等动画结束再继续
+    if BattleResolution.isActive() then return end
+
     -- 判断当前应由谁行动，激活对应 actor
     local phase = self.fsm:effectivePhase()
     local actorIndex = self:_getActorIndex(phase)
@@ -282,6 +302,15 @@ function GameController:update(dt)
 
     self._activeActor = actor
     actor:onEnter(self, phase)
+
+    -- 语义：「谁能操作」→ 行动方高亮
+    -- 视觉坐标与数学坐标行方向相反：玩家在视觉下方但对应数学上半区(row 1~4, isBlockLower=false)
+    -- 所以玩家操作时传 false（数学上半高亮=视觉下半），对手操作时传 true
+    if self._battleGrid and self._battleGrid:isBorderInitialized() then
+        local actorIsLower = (actorIndex ~= self._playerIndex)
+        self._battleGrid:signalActiveSide(actorIsLower)
+    end
+
     print(string.format("[GC-update] 激活完成 %s  waiting=%s", actorName, tostring(self._waitingForInput)))
 end
 
@@ -603,16 +632,36 @@ function GameController:_onPhaseChanged(phase, subPhase)
     self._lastBannerIndex = barIndex
 
     if barIndex == 3 then
-        -- 行动阶段：BattleGrid 信号动画（翠绿=己方，深红=对手）
-        local isPlayerTurn = (self.fsm.turnPlayerIndex == self._playerIndex)
-        if self._battleGrid then
-            if isPlayerTurn then
-                self._battleGrid:signalYourTurn()
-            else
-                self._battleGrid:signalOpponentTurn()
+        -- 行动阶段：首次建立边框底态（颜色方向由 attackerIsLower 决定）
+        -- signalActiveSide 不在此处调用，由 update() 激活 actor 时统一处理
+        if self._battleGrid and not BattleResolution.isActive() then
+            if not self._borderInitialized then
+                self._borderInitialized = true
+                self._battleGrid:setBorderState(self._attackerIsLower, false, self._attackerIsLower)
             end
         end
         SFX.phase()
+    elseif barIndex == 5 then
+        -- 结束阶段（无战斗时换边；有战斗时由 BattleResolution.dissolve 直接揭露终态）
+        -- BattleResolution 活跃期间不触发流动换色，dissolve 已经处理了边框过渡
+        if self._battleGrid and not self._combatThisTurn and not BattleResolution.isActive() then
+            local nextTurnPlayerIndex = (self.fsm.turnPlayerIndex == 1) and 2 or 1
+            local newAttackerIsLower  = (nextTurnPlayerIndex ~= self._playerIndex)
+            -- LOWER_POS=Z=+1=对手区；UPPER_POS=Z=-1=玩家区
+            -- 对手攻击时 newAttackerIsLower=true → 剑在对手区 → swordInLower=true
+            local swordInLower        = newAttackerIsLower
+
+            self._battleGrid:flowBorderColors(newAttackerIsLower, 1.5, function()
+                self._attackerIsLower = newAttackerIsLower
+            end)
+            ZoneWatermark.swap(swordInLower)
+        end
+
+        local info = PHASE_BANNER_INFO[barIndex]
+        if info then
+            PhaseBanner.show(info.title, info.subtitle, "gold")
+            SFX.phase()
+        end
     else
         -- 其他阶段：小型角落标签
         local info = PHASE_BANNER_INFO[barIndex]
@@ -657,14 +706,15 @@ function GameController:_onGameOver(winnerIndex, reason)
 end
 
 function GameController:_onChainClosed(summary)
-    Timer.after(0.5, function()
+    -- 清理连招链上所有卡牌的辅助函数（注销展示注册 + 销毁节点 + 清空区域）
+    local function clearChainCards()
         local chainCards = self._zoneLayout:getCards("combatChain")
         for i = #chainCards, 1, -1 do
             self._cardPicker:unregisterDisplay(chainCards[i])
             chainCards[i]:destroy()
         end
         self._zoneLayout:clearZone("combatChain")
-    end)
+    end
 
     CombatLog.system(string.format(
         "连招链关闭: %d 环节, 总伤 %d, 命中 %d",
@@ -672,6 +722,9 @@ function GameController:_onChainClosed(summary)
 
     -- 只要有战斗发生（至少一次攻击声明），无论伤害是否为零都播放结算动画
     if summary.linkCount > 0 then
+        -- 标记本中回合有战斗，END_PHASE 不再触发顺时针流动
+        self._combatThisTurn = true
+
         if summary.totalDamage > 0 then
             SFX.combo()
             local cx, cy = self:_screenCenter()
@@ -680,24 +733,60 @@ function GameController:_onChainClosed(summary)
 
         -- 触发战斗结算全屏动画
         if not BattleResolution.isActive() then
-            local isPlayerWon = summary.hits > 0
-                and (self.fsm.turnPlayerIndex == self._playerIndex)
-            -- 攻击方是否在上半区：turn player = 玩家(index=1) 时攻击方在下半(upper=false)
+            -- attackerIsUpper（BattleResolution 视觉坐标）：攻击方在视觉上方？
+            -- 玩家在视觉下方(row1~4)，对手在视觉上方(row5~8)
+            -- 玩家攻击 → attackerIsUpper=false；对手攻击 → attackerIsUpper=true
             local attackerIsUpper = (self.fsm.turnPlayerIndex ~= self._playerIndex)
-            Timer.after(1.0, function()
-                BattleResolution.trigger({
-                    playerWon       = isPlayerWon,
-                    attackVal       = summary.lastAttackPower,
-                    defVal          = summary.lastTotalDefense,
-                    damage          = summary.totalDamage,
-                    attackerIsUpper = attackerIsUpper,
-                })
-            end)
+            local attackerWon = summary.hits > 0
+            -- isPlayerWon：玩家（视觉下方）实际获胜？
+            -- 玩家攻击(attackerIsUpper=false)且攻击胜 OR 对手攻击(attackerIsUpper=true)且攻击败
+            local isPlayerWon = (not attackerIsUpper) == attackerWon
+
+            -- 预算下一个中回合的攻击方位置（当前回合结束后换边）
+            local nextTurnPlayerIndex = (self.fsm.turnPlayerIndex == 1) and 2 or 1
+            -- BattleGrid lower = row5~8 = 视觉上方 = 对手侧；对手攻击时 newAttackerIsLower=true
+            local newAttackerIsLower  = (nextTurnPlayerIndex ~= self._playerIndex)
+            local swordInLower        = newAttackerIsLower  -- LOWER_POS=对手区；对手攻=true→剑在对手区
+
+            -- 立即调用 trigger（BR 内部有 PRE_DELAY 阶段等待 1 秒后再播动画）
+            -- isActive() 从此刻起立即返回 true，阻断所有外部边框操作（flowBorderColors 等）
+            -- 同时锁定边框高亮呼吸，整个结算动画期间由 BR 全权掌管颜色
+            if self._battleGrid then self._battleGrid:lockHighlight() end
+            BattleResolution.trigger({
+                playerWon          = isPlayerWon,
+                attackVal          = summary.lastAttackPower,
+                defVal             = summary.lastTotalDefense,
+                damage             = summary.totalDamage,
+                attackerIsUpper    = attackerIsUpper,
+                newAttackerIsLower = newAttackerIsLower,  -- dissolve 直接揭露终态
+                onDone = function()
+                    -- 战斗结算动画结束后再清理连招链卡牌，避免卡牌在动画中途消失
+                    clearChainCards()
+                    -- dissolve 动画结束即终态，更新状态变量
+                    self._attackerIsLower = newAttackerIsLower
+                    self._combatThisTurn  = false
+                    ZoneWatermark.swap(swordInLower)
+                    -- 解锁高亮，下一回合 signalActiveSide 可以重新呼吸
+                    if self._battleGrid then self._battleGrid:unlockHighlight() end
+                end,
+            })
+        else
+            -- BattleResolution 已激活（理论上不应发生），fallback 短延迟清理
+            Timer.after(0.5, clearChainCards)
         end
+    else
+        -- 无战斗环节（linkCount == 0），短延迟清理即可
+        Timer.after(0.5, clearChainCards)
     end
 end
 
 function GameController:_onTurnStarted(turnPlayerIndex, turnNumber)
+    -- BattleGrid 坐标：row1~4 = 视觉下方 = 玩家侧 = grid "upper"(row<=ROWS/2)
+    --                  row5~8 = 视觉上方 = 对手侧 = grid "lower"(row>ROWS/2)
+    -- attackerIsLower=true 表示攻击方在 row5~8（对手侧），即对手攻击
+    self._attackerIsLower = (turnPlayerIndex ~= self._playerIndex)
+    self._combatThisTurn  = false
+
     if turnNumber > 1 then
         HUDSync.syncHandVisuals(self, 1)
         HUDSync.syncHandVisuals(self, 2)
@@ -747,6 +836,7 @@ function GameController:_phaseToBarIndex(phase, subPhase)
     elseif phase == TurnPhase.DRAW_PHASE   then return 2
     elseif phase == TurnPhase.ACTION_PHASE then return 3
     elseif phase == TurnPhase.COMBAT_CHAIN then return 4
+    elseif phase == TurnPhase.CHAIN_DEFEND then return 4  -- 防守属于战斗链阶段，避免触发 barIndex==3 边框逻辑
     elseif phase == TurnPhase.END_PHASE    then return 5
     else return 3
     end

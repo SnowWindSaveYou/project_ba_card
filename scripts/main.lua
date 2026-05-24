@@ -42,6 +42,9 @@ local GameOverScreen = require("UI.GameOverScreen")
 local PhaseBanner    = require("UI.PhaseBanner")
 local CombatCounter  = require("UI.CombatCounter")
 
+-- 背景系统
+local Background         = require("Scene.Background")
+
 -- 游戏控制器
 local GameController     = require("Controller.GameController")
 local CardGlowManager    = require("Card.CardGlowManager")
@@ -127,8 +130,12 @@ function Start()
     -- 4. 初始化 NanoVG（含卡牌文字渲染器）
     InitNanoVG()
 
+    -- 4.2. 初始化背景系统（在 NanoVG 初始化之后）
+    Background.init(scene_, nvg_, fontNormal_)
+
     -- 4.5. 区域水印（3D 节点，贴在桌面区域中心）
-    ZoneWatermark.init(scene_, true)
+    -- 玩家先攻：swordInLower=false → 剑在 UPPER_POS(Z=-1)=玩家区
+    ZoneWatermark.init(scene_, false)
 
     -- 5. 初始化布局系统
     InitLayouts()
@@ -169,6 +176,7 @@ function Start()
 end
 
 function Stop()
+    Background.destroy()
     Tween.clear()
     Timer.clear()
     ScorePopup.clear()
@@ -194,10 +202,21 @@ function CreateScene()
     scene_:CreateComponent("Octree")
     scene_:CreateComponent("DebugRenderer")
 
-    -- LightGroup 预设光照
+    -- LightGroup 预设光照（Daytime：平行光 + IBL + 半球 ambient）
     local lightGroupFile = cache:GetResource("XMLFile", "LightGroup/Daytime.xml")
     local lightGroup = scene_:CreateChild("LightGroup")
     lightGroup:LoadXML(lightGroupFile:GetRoot())
+
+    -- 从 LightGroup 内部获取 Zone，仅调整雾效（不新建 Zone，避免覆盖 LightGroup 的 IBL/SH）
+    local lgZone = lightGroup:GetComponent("Zone", true)
+    if lgZone then
+        lgZone.fogStart = 9000
+        lgZone.fogEnd   = 10000
+    end
+
+    -- 天空盒
+    local SkyUtils = require "urhox-libs.Rendering.SkyUtils"
+    SkyUtils.CreateGradientSky(scene_, SkyUtils.Presets.Day)
 
 
 end
@@ -297,6 +316,7 @@ function HandleUpdate(eventType, eventData)
     dpr_ = graphics:GetDPR()
 
     -- 更新核心系统
+    Background.update(dt)
     Tween.update(dt)
     Timer.update(dt)
 
@@ -416,7 +436,7 @@ function HandleUpdate(eventType, eventData)
         and gc_:getInputPhase() == TurnPhase.ACTION_PHASE then
         local zone = hudResult.clicked
         if zone == HUD.ZONE.WEAPON then
-            gc_:submitPlayerAction({ type = "weapon_attack" })
+            gc_:submitPlayerAction({ type = "weapon", weaponIndex = 1 })
         elseif zone == HUD.ZONE.ARMOR_UPPER then
             gc_:submitPlayerAction({ type = "armor_ability", slot = CardData.SLOT.UPPER })
         elseif zone == HUD.ZONE.ARMOR_LOWER then
@@ -584,6 +604,9 @@ function HandleNanoVGRender(eventType, eventData)
     nvgScale_ = dpr * densityFactor
     local w = screenW_ / nvgScale_
     local h = screenH_ / nvgScale_
+
+    -- 背景层渲染（写入各 RT，完成后自动恢复 nil target）
+    Background.render()
 
     nvgBeginFrame(nvg_, w, h, nvgScale_)
 

@@ -103,13 +103,25 @@ local function makeSolid(r, g, b, a)
     return mat:Clone("")
 end
 
+-- 克隆 DiffAlpha.xml + UNLIT：alpha 混合 + 不受光照暗化（只创建一次）
+local diffAlphaUnlitTech_ = nil
+local function getDiffAlphaUnlitTech()
+    if diffAlphaUnlitTech_ then return diffAlphaUnlitTech_ end
+    local base = cache:GetResource("Technique", "Techniques/DiffAlpha.xml")
+    diffAlphaUnlitTech_ = base:Clone("HP3D_DiffAlphaUnlit")
+    local pass = diffAlphaUnlitTech_:GetPass("alpha")
+    if pass then pass:SetPixelShaderDefines("DIFFMAP UNLIT") end
+    return diffAlphaUnlitTech_
+end
+
 local function makeTextured(texPath)
     if not texPath then return nil end
     if texCache_[texPath] then return texCache_[texPath]:Clone("") end
     local tex = cache:GetResource("Texture2D", texPath)
     if not tex then return nil end
+    tex:SetSRGB(true)
     local mat = Material:new()
-    mat:SetTechnique(0, cache:GetResource("Technique", "Techniques/DiffAlpha.xml"))
+    mat:SetTechnique(0, getDiffAlphaUnlitTech())  -- alpha 混合 + 不受光照暗化
     mat:SetTexture(TU_DIFFUSE, tex)
     mat:SetShaderParameter("MatDiffColor", Variant(Color(1,1,1,1)))
     texCache_[texPath] = mat

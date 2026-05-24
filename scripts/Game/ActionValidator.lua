@@ -474,7 +474,48 @@ function ActionValidator.canPlaceToArsenal(player, cardId, phase)
 end
 
 -- ============================================================================
--- 10. 英雄能力验证
+-- 10. 装备技能验证
+-- ============================================================================
+
+--- 检查能否激活装备主动技能
+---@param player table
+---@param slot string  SLOT.UPPER / SLOT.LOWER
+---@param phase string
+---@return boolean, string|nil
+function ActionValidator.canUseEquipmentAbility(player, slot, phase)
+    if phase ~= TurnPhase.ACTION_PHASE then
+        return result(false, "wrong_phase")
+    end
+
+    local eq = player:getEquipment(slot)
+    if not eq then
+        return result(false, "no_equipment")
+    end
+
+    if eq.usedAbilityThisTurn then
+        return result(false, "equipment_ability_used")
+    end
+
+    -- 护具必须有 customHandler 或 effects 才算有主动技能
+    local data = eq.data
+    if not data.customHandler and (not data.effects or #data.effects == 0) then
+        return result(false, "equipment_no_ability")
+    end
+
+    -- 费用检查（若 data.cost 有值）
+    local cost = data.cost or 0
+    if cost > 0 then
+        local available = player.resourcePool + PitchSystem.getPitchableTotal(player, nil)
+        if available < cost then
+            return result(false, "insufficient_resource")
+        end
+    end
+
+    return result(true)
+end
+
+-- ============================================================================
+-- 11. 英雄能力验证
 -- ============================================================================
 
 --- 检查能否使用英雄能力
@@ -651,6 +692,8 @@ ActionValidator.ERROR_MESSAGES = {
     no_equipment         = "没有装备此护具",
     equipment_no_defense = "护具防御值为 0",
     equipment_used       = "护具本回合已使用",
+    equipment_ability_used = "护具技能本回合已使用",
+    equipment_no_ability = "此护具没有主动技能",
     no_pitch_value       = "该牌无充能值",
     ability_already_used = "英雄能力本回合已使用",
 }
