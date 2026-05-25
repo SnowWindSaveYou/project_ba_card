@@ -13,6 +13,7 @@ local GameFSM      = require("Game.GameFSM")
 local Player       = require("Game.Player")
 local TurnPhase    = require("Game.TurnPhase")
 local Timer        = require("Core.Timer")
+local Tween        = require("Core.Tween")
 local PhaseBar     = require("UI.PhaseBar")
 local CombatLog    = require("UI.CombatLog")
 local ActionBar      = require("UI.ActionBar")
@@ -472,7 +473,10 @@ function GameController:_onCardPlayed(playerIndex, cardId, cardData, actionType)
     local isPlayer = (playerIndex == 1)
     local fan = self:_getHandFan(playerIndex)
 
-    fan:removeCard(card3d)
+    fan:removeAndDetach(card3d)
+    -- 杀掉残留的 applyLayout tween，避免与 playThrow 竞争
+    Tween.killAll(card3d.node)
+
     if isPlayer then
         self._cardPicker:unregister(card3d)
     end
@@ -534,13 +538,19 @@ function GameController:_onDefenseDeclared(link, totalDefense)
     local fan       = self:_getHandFan(defenderIndex)
     local isPlayer  = (defenderIndex == 1)
 
+    print(string.format("[Defense] defenderIndex=%d, link.defendCards=%d", defenderIndex, #link.defendCards))
     for _, def in ipairs(link.defendCards) do
         local cardId = def.cardId
         local card3d = self._cardIdToCard3D[cardId]
+        print(string.format("[Defense] cardId=%s card3d=%s", tostring(cardId), tostring(card3d ~= nil)))
         if card3d then
             local inFan = fan:indexOf(card3d) > 0
+            print(string.format("[Defense] inFan=%s faceUp=%s", tostring(inFan), tostring(card3d.faceUp)))
             if inFan then
-                fan:removeCard(card3d)
+                fan:removeAndDetach(card3d)
+                -- 杀掉残留的 applyLayout/dealSlide tween，避免与 playThrow 竞争
+                Tween.killAll(card3d.node)
+
                 if isPlayer then
                     self._cardPicker:unregister(card3d)
                 end
@@ -552,6 +562,7 @@ function GameController:_onDefenseDeclared(link, totalDefense)
                 local defPos = self._zoneLayout:getNextChainPos()
                 self._zoneLayout:addCard("combatChain", card3d)
                 local zl = self._zoneLayout
+                print(string.format("[Defense] playThrow -> defPos=(%g,%g,%g)", defPos.x, defPos.y, defPos.z))
                 CardAnimator.playThrow(card3d, Vector3(defPos.x, defPos.y, defPos.z), function()
                     -- 落地后重新居中整条战斗链
                     zl:arrangeZone("combatChain")

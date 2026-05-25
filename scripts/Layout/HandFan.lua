@@ -149,6 +149,24 @@ function HandFan:removeCard(card3d)
     return false
 end
 
+--- 移除卡牌并将节点从容器脱离到场景根（保持世界位置不变）
+--- 出牌/防御时必须用这个，否则后续用 worldPosition 驱动动画、
+--- 但 arrangeZone 用 position（局部坐标）重排时，节点还挂在手牌
+--- 容器下，位置会被解释为相对容器的偏移，导致卡牌"飞回手牌区"。
+---@param card3d table
+---@return boolean 是否移除成功
+function HandFan:removeAndDetach(card3d)
+    local removed = self:removeCard(card3d)
+    if removed then
+        local wPos = card3d.node.worldPosition
+        local wRot = card3d.node.worldRotation
+        self.scene:AddChild(card3d.node)
+        card3d.node.worldPosition = wPos
+        card3d.node.worldRotation = wRot
+    end
+    return removed
+end
+
 --- 清空手牌
 function HandFan:clear()
     self.cards = {}

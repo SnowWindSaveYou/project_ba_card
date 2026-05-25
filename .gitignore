@@ -1,5 +1,2 @@
 .build/
 dist/
-
-# Video files
-*.mp4
