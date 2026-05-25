@@ -301,6 +301,124 @@ end
 -- 7. 出牌落地冲击 (impact_slam) — 缩放弹跳打击感
 -- ============================================================================
 
+-- ============================================================================
+-- 8. 战斗结算蓄力飞升 (charge_flip) — 飞到己方半场并翻转 180°
+-- ============================================================================
+
+--- 蓄力动画：飞到半场空中目标点，同时绕 Y 轴翻转 180°
+---@param card3d table
+---@param targetPos Vector3 半场蓄力点（世界坐标）
+---@param duration number 动画时长
+---@param onComplete function|nil
+function CardAnimator.chargeFlip(card3d, targetPos, duration, onComplete)
+    if not card3d or not card3d.node then
+        if onComplete then onComplete() end
+        return
+    end
+
+    card3d.animState = "animating"
+    Tween.killAll(card3d.node)
+
+    local startPos  = card3d.node.worldPosition
+    local startRot  = card3d.node.worldRotation
+    -- 目标旋转：在当前旋转基础上绕 Y 轴翻转 180°
+    local flipDelta = Quaternion(180, Vector3.UP)
+    local targetRot = startRot * flipDelta
+
+    local proxy = { t = 0 }
+    Tween.to(proxy, duration, { t = 1.0 }, {
+        easing = Easing.outCubic,
+        onUpdate = function(_, easedT)
+            local x = startPos.x + (targetPos.x - startPos.x) * easedT
+            local y = startPos.y + (targetPos.y - startPos.y) * easedT
+            local z = startPos.z + (targetPos.z - startPos.z) * easedT
+            card3d.node.worldPosition = Vector3(x, y, z)
+            card3d.node.worldRotation = startRot:Slerp(targetRot, easedT)
+        end,
+        onComplete = function()
+            card3d.node.worldPosition = targetPos
+            card3d.node.worldRotation = targetRot
+            card3d.animState = "idle"
+            if onComplete then onComplete() end
+        end,
+    })
+end
+
+-- ============================================================================
+-- 9. 战斗结算冲刺 (dash_to_target) — 直线高速冲向目标点
+-- ============================================================================
+
+--- 冲刺动画：直线高速飞向目标点（无弧线）
+---@param card3d table
+---@param targetPos Vector3 目标点（世界坐标）
+---@param duration number 动画时长（建议 0.18~0.25s）
+---@param onComplete function|nil
+function CardAnimator.dashToTarget(card3d, targetPos, duration, onComplete)
+    if not card3d or not card3d.node then
+        if onComplete then onComplete() end
+        return
+    end
+
+    card3d.animState = "animating"
+    Tween.killAll(card3d.node)
+
+    local startPos = card3d.node.worldPosition
+    local startRot = card3d.node.worldRotation
+
+    local proxy = { t = 0 }
+    Tween.to(proxy, duration, { t = 1.0 }, {
+        easing = Easing.inQuad,
+        onUpdate = function(_, easedT)
+            local x = startPos.x + (targetPos.x - startPos.x) * easedT
+            local y = startPos.y + (targetPos.y - startPos.y) * easedT
+            local z = startPos.z + (targetPos.z - startPos.z) * easedT
+            card3d.node.worldPosition = Vector3(x, y, z)
+        end,
+        onComplete = function()
+            card3d.node.worldPosition = targetPos
+            card3d.animState = "idle"
+            if onComplete then onComplete() end
+        end,
+    })
+end
+
+-- ============================================================================
+-- 10. 战斗结算击碎 (shatter) — 放大爆开后消失
+-- ============================================================================
+
+--- 击碎动画：scale 先放大后缩为零，然后隐藏节点
+---@param card3d table
+---@param onComplete function|nil
+function CardAnimator.shatter(card3d, onComplete)
+    if not card3d or not card3d.node then
+        if onComplete then onComplete() end
+        return
+    end
+
+    card3d.animState = "animating"
+    Tween.killAll(card3d.node)
+
+    -- 先放大
+    Tween.to(card3d.node, 0.1, {
+        scale = Vector3(1.6, 1.6, 1.6),
+    }, {
+        easing = Easing.outQuad,
+        onComplete = function()
+            -- 再缩至零
+            Tween.to(card3d.node, 0.18, {
+                scale = Vector3(0.01, 0.01, 0.01),
+            }, {
+                easing = Easing.inCubic,
+                onComplete = function()
+                    card3d.node.enabled = false
+                    card3d.animState = "idle"
+                    if onComplete then onComplete() end
+                end,
+            })
+        end,
+    })
+end
+
 --- 出牌落地时的冲击动效（缩放弹跳）
 ---@param card3d table
 ---@param onComplete function|nil

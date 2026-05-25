@@ -11,7 +11,8 @@
 --   - 外部触发：GameController 在 onChainClosed 后调用 BattleResolution.trigger()
 -- ============================================================================
 
-local Theme = require("UI.Theme")
+local Theme        = require("UI.Theme")
+local CardAnimator = require("Anim.CardAnimator")
 
 local BattleResolution = {}
 
@@ -234,6 +235,15 @@ local state = {
 
     -- onDone 回调
     onDone = nil,
+
+    -- 3D 卡牌引用（由 trigger 传入，可为 nil）
+    attackCard3d = nil,
+    defCard3d    = nil,
+
+    -- 卡牌动画触发标志
+    cardChargeTriggered = false,
+    cardDashTriggered   = false,
+    cardHitTriggered    = false,
 }
 
 -- ============================================================================
@@ -253,6 +263,8 @@ end
 ---  defVal          : number        防御方防御值
 ---  damage          : number        最终伤害（用于 "-N" 显示）
 ---  attackerIsUpper : boolean|nil   攻击方是否在上半区
+---  attackCard3d    : table|nil     攻击方卡牌 Card3D 实例
+---  defCard3d       : table|nil     防御方卡牌 Card3D 实例
 ---  onDone          : function|nil  动画结束后回调
 function BattleResolution.trigger(params)
     if state.phase ~= STATE.IDLE then return end  -- 已在运行则忽略
@@ -264,6 +276,8 @@ function BattleResolution.trigger(params)
     state.attackerIsUpper    = (params.attackerIsUpper == nil) and false or params.attackerIsUpper
     state.newAttackerIsLower = params.newAttackerIsLower  -- 可为 nil
     state.onDone             = params.onDone
+    state.attackCard3d       = params.attackCard3d or nil
+    state.defCard3d          = params.defCard3d    or nil
 
     -- 重置
     PARTICLES = {}
@@ -284,6 +298,9 @@ function BattleResolution.trigger(params)
     state.attackImpactDone = false
     state.winnerAlpha     = 0
     state.screenShake     = 0
+    state.cardChargeTriggered = false
+    state.cardDashTriggered   = false
+    state.cardHitTriggered    = false
 
     -- 进入预等待阶段：isActive() 立即返回 true，阻断外部边框操作
     -- 实际动画在 preDelayTimer 倒计时结束后才开始
@@ -301,6 +318,13 @@ function BattleResolution.skip()
     if state.phase ~= STATE.IDLE then
         PARTICLES = {}
         if state.grid then state.grid:dissolve(0.1) end
+        -- 隐藏残留的 3D 卡牌节点
+        if state.attackCard3d and state.attackCard3d.node then
+            state.attackCard3d.node.enabled = false
+        end
+        if state.defCard3d and state.defCard3d.node then
+            state.defCard3d.node.enabled = false
+        end
         state.phase = STATE.IDLE
         if state.onDone then state.onDone() end
     end
@@ -399,6 +423,40 @@ function BattleResolution.update(dt)
             state.gridTriggered = true
         end
 
+        -- ── 3D 卡牌动画 ──────────────────────────────────────────────────────
+        -- progress=0.00：双方卡牌飞起到各自半场蓄力点，旋转 180°
+        if not state.cardChargeTriggered then
+            state.cardChargeTriggered = true
+            -- 攻击方蓄力点：attackerIsUpper=true → 攻击方在视觉上方(Z>0)；反之在下方(Z<0)
+            local attackChargeZ = state.attackerIsUpper and  0.9 or -0.9
+            local defChargeZ    = state.attackerIsUpper and -0.9 or  0.9
+            local chargeY       = 1.2
+
+            if state.attackCard3d and state.attackCard3d.node then
+                local ax = state.attackCard3d.node.worldPosition.x
+                CardAnimator.chargeFlip(state.attackCard3d,
+                    Vector3(ax, chargeY, attackChargeZ), 0.55)
+            end
+            if state.defCard3d and state.defCard3d.node then
+                local dx = state.defCard3d.node.worldPosition.x
+                CardAnimator.chargeFlip(state.defCard3d,
+                    Vector3(dx, chargeY, defChargeZ), 0.55)
+            end
+        end
+
+        -- progress=0.27：双方卡牌冲刺向中场碰撞点
+        if p >= 0.27 and not state.cardDashTriggered then
+            state.cardDashTriggered = true
+            local midPoint = Vector3(0, 0.8, 0)
+            if state.attackCard3d and state.attackCard3d.node then
+                CardAnimator.dashToTarget(state.attackCard3d, midPoint, 0.20)
+            end
+            if state.defCard3d and state.defCard3d.node then
+                CardAnimator.dashToTarget(state.defCard3d, midPoint, 0.20)
+            end
+        end
+        -- ─────────────────────────────────────────────────────────────────────
+
         -- 碰撞瞬间（progress = 0.35）
         if p >= 0.35 and not state.clashTriggered then
             state.clashTriggered = true
@@ -414,6 +472,56 @@ function BattleResolution.update(dt)
 
             -- 粒子爆发（需要屏幕尺寸，用 0,0 占位，draw 时会用真实坐标）
             state.clashParticlesPending = true
+
+            -- ── 3D 卡牌：判定胜负，败方击碎，胜方继续冲向英雄 ──────────────
+            local attackWon = (state.attackVal >= state.defVal)
+            -- 英雄命中目标点：胜方冲向对方英雄
+            -- 攻击方胜：攻击卡飞向防御方英雄（对面），防御卡被击碎
+            -- 防御方胜：防御卡飞向攻击方英雄（对面），攻击卡被击碎
+            local heroTargetZ
+            if attackWon then
+                -- 攻击卡胜，攻击方在 attackerIsUpper 侧，英雄目标在对面
+                heroTargetZ = state.attackerIsUpper and -1.8 or 1.8
+            else
+                -- 防御卡胜，防御方英雄目标在对面（攻击方侧）
+                heroTargetZ = state.attackerIsUpper and 1.8 or -1.8
+            end
+            local heroTarget = Vector3(0, 0.3, heroTargetZ)
+
+            if attackWon then
+                -- 防御卡击碎
+                if state.defCard3d and state.defCard3d.node then
+                    CardAnimator.shatter(state.defCard3d)
+                end
+                -- 攻击卡冲向英雄
+                if state.attackCard3d and state.attackCard3d.node then
+                    CardAnimator.dashToTarget(state.attackCard3d, heroTarget, 0.35,
+                        function()
+                            if state.attackCard3d and state.attackCard3d.node then
+                                state.attackCard3d.node.enabled = false
+                            end
+                            state.cardHitTriggered = true
+                            state.screenShake = state.screenShake + 5.0
+                        end)
+                end
+            else
+                -- 攻击卡击碎
+                if state.attackCard3d and state.attackCard3d.node then
+                    CardAnimator.shatter(state.attackCard3d)
+                end
+                -- 防御卡冲向英雄
+                if state.defCard3d and state.defCard3d.node then
+                    CardAnimator.dashToTarget(state.defCard3d, heroTarget, 0.35,
+                        function()
+                            if state.defCard3d and state.defCard3d.node then
+                                state.defCard3d.node.enabled = false
+                            end
+                            state.cardHitTriggered = true
+                            state.screenShake = state.screenShake + 5.0
+                        end)
+                end
+            end
+            -- ─────────────────────────────────────────────────────────────────
         end
 
         -- 碰撞后各值回落
@@ -830,31 +938,9 @@ function _drawCrownWatermark(ctx, w, h, time, fontId)
 end
 
 function _drawAttackExec(ctx, w, h, p, time, fontId)
-    -- 射线起点（胜方区右上）、终点（败方区左下）
-    -- 胜方 = 玩家时：射线从下半打向上半
-    local sx, sy, ex, ey
-    if state.playerWon then
-        sx = w * 0.72;  sy = h * 0.78
-        ex = w * 0.28;  ey = h * 0.22
-    else
-        sx = w * 0.72;  sy = h * 0.22
-        ex = w * 0.28;  ey = h * 0.78
-    end
-
-    -- 射线 head 进度（0→1 进入，p=0.35 后开始消退）
-    local headP = 0
-    if p < 0.35 then
-        headP = p / 0.35
-    else
-        headP = 1.0
-    end
-
-    _drawAttackLine(ctx, sx, sy, ex, ey, headP, time)
-
-    -- 火焰爆炸（撞击后）
-    if state.fireAlpha > 0.01 then
-        _drawFireExplosion(ctx, ex, ey, state.fireAlpha, time)
-    end
+    -- 伤害星爆落点（始终居中偏上）
+    local ex = w * 0.50
+    local ey = h * 0.42
 
     -- 漫画星爆 "-N"
     if state.dmgAlpha > 0.01 then

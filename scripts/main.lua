@@ -291,10 +291,22 @@ function InitLayouts()
         cardScale = 0.7,
     })
 
-    -- 3D 英雄面板（相机空间 Quad，挂在相机节点）
+    -- 3D 英雄面板（卡桌外侧平铺，作为桌面延伸区域）
+    -- 卡桌：WIDTH=6, DEPTH=4, TABLE_Y=-0.03
+    -- 玩家牌库在 Z=-1.3（靠相机侧=屏幕下方），玩家面板在 Z=-2.8（桌面近端外侧）
+    -- 对手牌库在 Z=+1.3（远离相机=屏幕上方），对手面板在 Z=+2.8（桌面远端外侧）
+    -- 两侧均绕 Y 轴旋转 180°，使卡面方向从相机视角看为正（头像朝屏幕上方）
     -- heroKey/class 在 HUDSync 第一次同步时通过 HeroPanel3D.setHero() 更新
-    heroPanel3DPlayer_ = HeroPanel3D.create(camNode, true,  "kaede",    "warrior",  { r=82,  g=200, b=160 })
-    heroPanel3DOpp_    = HeroPanel3D.create(camNode, false, "xia_lin",  "ninja",    { r=255, g=107, b=107 })
+    local PANEL_Y   = -0.025
+    local PANEL_ROT = Quaternion()
+    heroPanel3DPlayer_ = HeroPanel3D.create(scene_, true,  "kaede",   "warrior",
+        { r=82,  g=200, b=160 },
+        Vector3(0, PANEL_Y, -2.8),
+        PANEL_ROT)
+    heroPanel3DOpp_    = HeroPanel3D.create(scene_, false, "xia_lin", "ninja",
+        { r=255, g=107, b=107 },
+        Vector3(0, PANEL_Y, 2.8),
+        PANEL_ROT)
 end
 
 

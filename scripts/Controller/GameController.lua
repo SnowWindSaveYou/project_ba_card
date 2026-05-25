@@ -538,14 +538,11 @@ function GameController:_onDefenseDeclared(link, totalDefense)
     local fan       = self:_getHandFan(defenderIndex)
     local isPlayer  = (defenderIndex == 1)
 
-    print(string.format("[Defense] defenderIndex=%d, link.defendCards=%d", defenderIndex, #link.defendCards))
     for _, def in ipairs(link.defendCards) do
         local cardId = def.cardId
         local card3d = self._cardIdToCard3D[cardId]
-        print(string.format("[Defense] cardId=%s card3d=%s", tostring(cardId), tostring(card3d ~= nil)))
         if card3d then
             local inFan = fan:indexOf(card3d) > 0
-            print(string.format("[Defense] inFan=%s faceUp=%s", tostring(inFan), tostring(card3d.faceUp)))
             if inFan then
                 fan:removeAndDetach(card3d)
                 -- 杀掉残留的 applyLayout/dealSlide tween，避免与 playThrow 竞争
@@ -562,7 +559,6 @@ function GameController:_onDefenseDeclared(link, totalDefense)
                 local defPos = self._zoneLayout:getNextChainPos()
                 self._zoneLayout:addCard("combatChain", card3d)
                 local zl = self._zoneLayout
-                print(string.format("[Defense] playThrow -> defPos=(%g,%g,%g)", defPos.x, defPos.y, defPos.z))
                 CardAnimator.playThrow(card3d, Vector3(defPos.x, defPos.y, defPos.z), function()
                     -- 落地后重新居中整条战斗链
                     zl:arrangeZone("combatChain")
@@ -763,6 +759,9 @@ function GameController:_onChainClosed(summary)
             -- isActive() 从此刻起立即返回 true，阻断所有外部边框操作（flowBorderColors 等）
             -- 同时锁定边框高亮呼吸，整个结算动画期间由 BR 全权掌管颜色
             if self._battleGrid then self._battleGrid:lockHighlight() end
+            local chainCards4Anim = self._zoneLayout:getCards("combatChain")
+            local attackCard3d = chainCards4Anim[1] or nil
+            local defCard3d    = (#chainCards4Anim >= 2) and chainCards4Anim[2] or nil
             BattleResolution.trigger({
                 playerWon          = isPlayerWon,
                 attackVal          = summary.lastAttackPower,
@@ -770,6 +769,8 @@ function GameController:_onChainClosed(summary)
                 damage             = summary.totalDamage,
                 attackerIsUpper    = attackerIsUpper,
                 newAttackerIsLower = newAttackerIsLower,  -- dissolve 直接揭露终态
+                attackCard3d       = attackCard3d,
+                defCard3d          = defCard3d,
                 onDone = function()
                     -- 战斗结算动画结束后再清理连招链卡牌，避免卡牌在动画中途消失
                     clearChainCards()

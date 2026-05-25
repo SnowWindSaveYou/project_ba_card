@@ -1,9 +1,9 @@
 -- ============================================================================
--- UI/HeroPanel3D.lua — 相机空间 3D 英雄面板（Blue Archive 风格，卡牌布局）
+-- UI/HeroPanel3D.lua — 卡桌空间 3D 英雄面板（Blue Archive 风格，卡牌布局）
 --
--- 布局（挂在相机子节点，局部坐标 = 屏幕固定位置）：
---   玩家面板  — 相机正前方底部偏左，略微前倾朝向相机
---   对手面板  — 相机正前方顶部偏左，略微前倾朝向相机
+-- 布局（挂在场景节点，朝上平铺，作为卡桌延伸区域）：
+--   玩家面板  — 卡桌底部外侧（Z 正方向），与桌面齐平朝上
+--   对手面板  — 卡桌顶部外侧（Z 负方向），与桌面齐平朝上，绕 Y 轴旋转 180°
 --
 -- 卡牌组成（每个面板，从左到右）：
 --   武器卡    — 较小，左侧区域，含武器图 + 卡框 + 攻击/费用 badge
@@ -20,35 +20,32 @@ local Theme = require("UI.Theme")
 local HeroPanel3D = {}
 
 -- ============================================================================
--- 面板元素尺寸（世界空间米）
+-- 面板元素尺寸（世界空间米，平铺在卡桌外侧）
+-- 相机高度 ~9m，桌面 6×4m，面板需放大约 2.2 倍才有合适视觉比例
 -- ============================================================================
 
--- 英雄卡（标准卡比例 63×88mm 缩放到合适尺寸）
--- FOV=50, Z=3 时屏幕可视半高≈1.40m；英雄卡占屏幕高约 20%
-local HERO_W  = 0.40
-local HERO_H  = 0.56
+-- 英雄卡（标准卡比例 63×88mm，放大适配桌面尺度）
+local HERO_W  = 0.88
+local HERO_H  = 1.23
 
--- 小卡（武器/装备，约 68% 英雄卡大小）
-local SMALL_W = 0.27
-local SMALL_H = 0.38
+-- 小卡（武器/装备，约 67% 英雄卡大小）
+local SMALL_W = 0.59
+local SMALL_H = 0.83
 
 -- 三卡之间的水平间隙
-local CARD_GAP = 0.015
+local CARD_GAP = 0.033
 
 -- 装备卡叠放偏移（两张卡错开显示）
-local EQUIP_STACK_DX = 0.035  -- 右上卡比左下卡向右偏
-local EQUIP_STACK_DZ = 0.055  -- 右上卡比左下卡向上偏（局部 Z）
+local EQUIP_STACK_DX = 0.077  -- 右上卡比左下卡向右偏
+local EQUIP_STACK_DZ = 0.121  -- 右上卡比左下卡向上偏（局部 Z）
 
--- 面板整体在相机局部空间的位置
-local DIST  = 3.0
-
--- Y 层偏移（避免深度冲突，参考 Card3D）
+-- Y 层偏移（避免深度冲突，单位米）
 local LAYER = {
-    back     = -0.001,
-    art      =  0.001,
-    border   =  0.002,
-    gradient =  0.003,
-    badge    =  0.004,
+    back     = -0.002,
+    art      =  0.002,
+    border   =  0.004,
+    gradient =  0.006,
+    badge    =  0.008,
 }
 
 -- 渲染优先级：普通场景 < 面板背景 < 面板内容 < 拖拽卡牌(200+)
@@ -146,13 +143,7 @@ local function makeQuad(parent, name, lx, ly, lz, sw, sh, mat, ro)
 end
 
 -- ============================================================================
--- badge 辅助：在卡角创建贴图角标 Quad
---   parent  — 父节点
---   prefix  — 命名前缀
---   cx, cz  — 卡面中心
---   bx, bz  — badge 中心相对卡中心的偏移 (已含卡位移)
---   size    — badge 正方形边长（米）
---   texPath — 角标纹理路径
+-- badge 辅助
 -- ============================================================================
 local function buildBadge(parent, prefix, bxWorld, bzWorld, size, texPath)
     local mat = makeTextured(texPath)
@@ -161,47 +152,25 @@ local function buildBadge(parent, prefix, bxWorld, bzWorld, size, texPath)
 end
 
 -- ============================================================================
--- 构建单张「卡牌」子结构（复用于英雄卡、武器卡、装备卡）
---   parent     — 父节点（panel.container）
---   prefix     — 节点命名前缀（"hero"/"weapon"/"equipUp"/"equipLo"）
---   cx, cz     — 卡面中心在容器局部坐标 (X, Z)，Y 由层级决定
---   cw, ch     — 卡宽、卡高（世界空间米）
---   artTex     — 插画纹理路径（nil → 白色底板占位）
---   accentRGB  — 卡框/底部强调色 {r,g,b}
---   badges     — badge 配置列表，每项 { pos="cost"|"attack"|"defense", tex=texPath }
---                pos 枚举对应卡角：
---                  "cost"    → 左上角
---                  "attack"  → 左下角
---                  "defense" → 右下角
--- 返回值：
---   nodes.art       — 插画节点（供 setHero 替换贴图）
---   nodes.badgeNodes — badge 节点列表（按 badges 顺序）
+-- 构建单张「卡牌」子结构
 -- ============================================================================
 local function buildCard(parent, prefix, cx, cz, cw, ch, artTex, accentRGB, badges)
     local ac = accentRGB or Theme.GREEN
 
-    -- 1. 卡背底板（白色不透明，略带蓝灰）
     local bgNode = makeQuad(parent, prefix.."_bg",
         cx, LAYER.back, cz, cw, ch, makeSolid(248, 250, 255, 245), RO_BASE)
 
-    -- 2. 插画层
     local artMat = makeTextured(artTex) or makeSolid(210, 220, 240, 200)
     local artNode = makeQuad(parent, prefix.."_art",
         cx, LAYER.art, cz, cw * 0.92, ch * 0.92, artMat, RO_ART)
 
-    -- 3. 卡框（card_border_mask.png，全尺寸覆盖）
     makeQuad(parent, prefix.."_frame",
         cx, LAYER.border, cz, cw, ch, makeTextured(TEX_BORDER), RO_FRAME)
 
-    -- 4. 顶边强调色细条
     makeQuad(parent, prefix.."_bar",
         cx, LAYER.badge, cz - ch * 0.47, cw, ch * 0.03,
         makeSolid(ac.r, ac.g, ac.b, 200), RO_BADGE)
 
-    -- 5. 四角 badge（3D 贴图角标，参考 Card3D 布局）
-    --    左上  (cost)    x=-0.36w  z=+0.38h
-    --    左下  (attack)  x=-0.36w  z=-0.38h
-    --    右下  (defense) x=+0.36w  z=-0.38h
     local BADGE_SIZE = cw * 0.22
     local badgePosMap = {
         cost    = { ox = -cw * 0.36, oz =  ch * 0.38 },
@@ -231,80 +200,59 @@ end
 
 -- ============================================================================
 -- HeroPanel3D.create
--- @param camNode   Node  相机节点
--- @param isPlayer  bool  true=玩家(底部左侧), false=对手(顶部左侧)
--- @param heroKey   string 如 "kaede"
--- @param class     string 如 "warrior"
--- @param accentRGB table  {r,g,b} 面板主题色
+--
+-- 创建平铺在卡桌外侧的英雄面板（朝上，作为桌面延伸）
+--
+-- @param parentNode  Node    父节点（通常为场景根 scene_）
+-- @param isPlayer    bool    true=玩家(桌面底部外侧), false=对手(桌面顶部外侧)
+-- @param heroKey     string  如 "kaede"
+-- @param class       string  如 "warrior"
+-- @param accentRGB   table   {r,g,b} 面板主题色
+-- @param worldPos    Vector3 容器世界坐标（由调用方提供，适配桌面布局）
+-- @param worldRot    Quaternion 容器世界旋转（nil = 单位旋转，朝上平铺）
 -- ============================================================================
-function HeroPanel3D.create(camNode, isPlayer, heroKey, class, accentRGB)
+function HeroPanel3D.create(parentNode, isPlayer, heroKey, class, accentRGB, worldPos, worldRot)
     local panel = {}
     local ac = accentRGB or (isPlayer and Theme.GREEN or Theme.RED)
 
-    -- ------------------------------------------------------------------
-    -- 容器节点（挂在相机局部空间）
-    -- ------------------------------------------------------------------
-    local container = camNode:CreateChild(isPlayer and "HeroPanelPlayer" or "HeroPanelOpp")
-
-    -- 整体位置：玩家区居中下，对手区居中上
-    -- X=0 水平居中（相机局部坐标，X=0 正对屏幕中央）
-    -- 可视 Y 范围约 ±1.40m（FOV=50, Z=3.0）
-    -- 玩家 Y=-1.00：低于手牌展开中心(Y=-0.9)
-    -- 对手 Y=+1.10：靠近屏幕上沿（距顶边约 0.30m）
-    local offsetX = 0.0
-    local offsetY = isPlayer and -1.00 or 1.10
-    container.position = Vector3(offsetX, offsetY, DIST)
-
-    -- 朝向相机：与 HandFan 卡牌一致，绕 X 轴前倾 -75°
-    -- 玩家区稍微多倾（-78），对手区略少（-72）
-    local pitchDeg = isPlayer and -78 or -72
-    container.rotation = Quaternion(pitchDeg, Vector3.RIGHT)
+    -- 容器节点（挂在场景，世界空间平铺）
+    local container = parentNode:CreateChild(isPlayer and "HeroPanelPlayer" or "HeroPanelOpp")
+    container.position = worldPos or Vector3(0, 0, 0)
+    container.rotation = worldRot or Quaternion()
 
     -- ------------------------------------------------------------------
     -- 三卡布局（以容器原点 X=0 为英雄卡中心，对称展开）
-    --   weapCX         heroCX=0         equipBaseCX
-    --   [武器卡]  gap  [英雄卡]  gap  [装备卡(叠放)]
     -- ------------------------------------------------------------------
     local heroCX      = 0.0
     local weapCX      = -(HERO_W * 0.5 + CARD_GAP + SMALL_W * 0.5)
     local equipBaseCX =   HERO_W * 0.5 + CARD_GAP + SMALL_W * 0.5
 
-    -- 武器卡稍微下移（局部 Z+），装备区稍微上移（Z-），形成视觉层次
+    -- 武器卡稍向 Z+ 偏移，装备区稍向 Z- 偏移，形成视觉层次
     local weapCZ      =  HERO_H * 0.06
     local equipBaseCZ = -HERO_H * 0.04
 
     local heroArt = getHeroArt(heroKey, class)
-    -- 英雄卡：右下角 defense badge（显示 HP）
+
     panel.heroCard = buildCard(container, "hero",
         heroCX, 0, HERO_W, HERO_H, heroArt, ac,
         { { pos = "defense", tex = TEX_BADGE_DEFENSE } })
 
-    -- 武器卡：左上角 cost badge + 左下角 attack badge
     panel.weaponCard = buildCard(container, "weapon",
         weapCX, weapCZ, SMALL_W, SMALL_H, TEX_WEAPON, ac,
         { { pos = "cost",   tex = TEX_BADGE_COST   },
           { pos = "attack", tex = TEX_BADGE_ATTACK } })
 
-    -- ------------------------------------------------------------------
-    -- 装备卡（英雄卡右侧，两张叠放）
-    -- 下衣卡先渲染（renderOrder 低），上衣卡覆盖在上
-    -- ------------------------------------------------------------------
-
-    -- 下衣卡（右下偏移）：右下角 defense badge（显示耐久）
     panel.equipLoCard = buildCard(container, "equipLo",
         equipBaseCX + EQUIP_STACK_DX, equipBaseCZ - EQUIP_STACK_DZ,
         SMALL_W, SMALL_H, TEX_EQUIP_LO, ac,
         { { pos = "defense", tex = TEX_BADGE_DEFENSE } })
 
-    -- 上衣卡（左上偏移，覆盖下衣卡）：右下角 defense badge（显示耐久）
     panel.equipUpCard = buildCard(container, "equipUp",
         equipBaseCX - EQUIP_STACK_DX * 0.5, equipBaseCZ + EQUIP_STACK_DZ,
         SMALL_W, SMALL_H, TEX_EQUIP_UP, ac,
         { { pos = "defense", tex = TEX_BADGE_DEFENSE } })
 
-    -- ------------------------------------------------------------------
-    -- 元数据（供 NanoVG 投影计算用）
-    -- ------------------------------------------------------------------
+    -- 元数据
     panel.container = container
     panel.isPlayer  = isPlayer
     panel.heroKey   = heroKey
@@ -312,13 +260,9 @@ function HeroPanel3D.create(camNode, isPlayer, heroKey, class, accentRGB)
     panel.accentRGB = ac
 
     -- 屏幕投影缓存（每帧由 calcScreenRect 更新）
-    -- 英雄卡区域
-    panel.heroRect  = { x=0, y=0, w=0, h=0 }
-    -- 武器卡区域
-    panel.weapRect  = { x=0, y=0, w=0, h=0 }
-    -- 装备上卡区域
+    panel.heroRect    = { x=0, y=0, w=0, h=0 }
+    panel.weapRect    = { x=0, y=0, w=0, h=0 }
     panel.equipUpRect = { x=0, y=0, w=0, h=0 }
-    -- 装备下卡区域
     panel.equipLoRect = { x=0, y=0, w=0, h=0 }
 
     return panel
@@ -329,7 +273,6 @@ end
 -- ============================================================================
 local function projectLocalPos(panel, camera, vpW, vpH, lx, lz)
     local node = panel.container
-    -- 容器局部 → 世界
     local localPt = Vector3(lx, 0, lz)
     local worldPt = node:LocalToWorld(localPt)
 
@@ -342,16 +285,9 @@ local function projectLocalPos(panel, camera, vpW, vpH, lx, lz)
     return sp.x * vpW, sp.y * vpH, depth
 end
 
-local function depthToPixels(camera, vpH, cardH, depth)
-    return cardH * vpH / (2 * depth * math.tan(math.rad(camera.fov * 0.5)))
-end
-
 -- ============================================================================
 -- HeroPanel3D.calcScreenRect
 -- 更新各子卡的屏幕投影矩形（每帧在 NanoVGRender 前调用）
--- @param panel     table   HeroPanel3D 实例
--- @param camera    Camera  场景相机组件
--- @param vpW, vpH  number  NanoVG 视口逻辑像素宽高（物理/DPR）
 -- ============================================================================
 function HeroPanel3D.calcScreenRect(panel, camera, vpW, vpH)
     local function fillRect(rect, cx, cz, cw, ch)
@@ -386,7 +322,7 @@ function HeroPanel3D.calcScreenRect(panel, camera, vpW, vpH)
         equipBaseCX + EQUIP_STACK_DX, equipBaseCZ - EQUIP_STACK_DZ,
         SMALL_W, SMALL_H)
 
-    -- 兼容旧字段（HUD 可能仍用 screenX/Y/W/H）
+    -- 兼容旧字段
     panel.screenX = panel.heroRect.x
     panel.screenY = panel.heroRect.y
     panel.screenW = panel.heroRect.w
@@ -395,7 +331,6 @@ end
 
 -- ============================================================================
 -- HeroPanel3D.setHero
--- 动态替换英雄插画 + 主题色
 -- ============================================================================
 function HeroPanel3D.setHero(panel, heroKey, class, accentRGB)
     if not panel or not panel.container then return end
